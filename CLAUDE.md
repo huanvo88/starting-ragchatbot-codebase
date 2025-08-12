@@ -4,28 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running the Application
 
-### Quick Start
+### Setup & Run
 ```bash
-# Set up environment (first time only)
+# First time setup
 uv sync
-cp .env.example .env  # Then add your ANTHROPIC_API_KEY
+cp .env.example .env
+
+# For local Ollama (default - no API key needed):
+ollama pull qwen2.5:7b
+
+# For Anthropic Claude (alternative):
+Edit .env: set AI_PROVIDER=anthropic and add ANTHROPIC_API_KEY
 
 # Run application
 ./run.sh
 ```
 
-### Development Commands
-```bash
-# Manual server start with auto-reload
-cd backend && uv run uvicorn app:app --reload --port 8000
-
-# Install dependencies 
-uv sync
-
-# Access points:
-# - Web Interface: http://localhost:8000
-# - API Documentation: http://localhost:8000/docs
-```
+### Access Points
+- Web Interface: http://localhost:8000
+- API Documentation: http://localhost:8000/docs
 
 ## Architecture Overview
 
@@ -68,10 +65,14 @@ Frontend (Vanilla JS) → FastAPI → RAG System → AI Generator ↔ Search Too
 - **Lesson**: Individual lesson with optional links
 - **CourseChunk**: Text chunks with course/lesson metadata for vector storage
 
-### Configuration (`config.py`)
+### Configuration (`config.py` + `model_config.json`)
 
-Centralized configuration using environment variables and dataclass pattern:
-- Anthropic API settings (model: claude-sonnet-4-20250514)
+Centralized configuration using environment variables and external model configuration:
+- **AI Provider**: Choose between "ollama" (default, local) or "anthropic" (cloud)
+- **Model Configuration**: Managed via `backend/model_config.json` for easy model switching
+- **Ollama settings**: Default model (qwen2.5:7b) with available alternatives, base URL
+- **Anthropic API settings**: API key and model selection
+- **Streaming Support**: Real-time response display for better user experience
 - Embedding model (all-MiniLM-L6-v2)
 - Chunk processing parameters
 - ChromaDB storage location
@@ -115,7 +116,11 @@ Centralized configuration using environment variables and dataclass pattern:
 ### Development Notes
 
 - **No Test Framework**: Currently no automated testing infrastructure
-- **Environment Setup**: Requires ANTHROPIC_API_KEY in .env file
+- **AI Provider Options**: 
+  - Default: Local Ollama with qwen2.5:7b (no API key needed, faster responses)
+  - Alternative: Anthropic Claude (requires API key)
+- **Local Setup**: Requires Ollama installation and model download (`ollama pull qwen2.5:7b`)
+- **Model Switching**: Edit `backend/model_config.json` to change between qwen2.5:7b, qwen3:8b, qwen3:14b, etc.
 - **Data Persistence**: ChromaDB stores data in `backend/chroma_db/` directory
 - **Document Loading**: Course documents automatically loaded from `docs/` on startup
 - always use uv to run the server do not use pip directly

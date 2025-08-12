@@ -16,7 +16,23 @@ class RAGSystem:
         # Initialize core components
         self.document_processor = DocumentProcessor(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
         self.vector_store = VectorStore(config.CHROMA_PATH, config.EMBEDDING_MODEL, config.MAX_RESULTS)
-        self.ai_generator = AIGenerator(config.ANTHROPIC_API_KEY, config.ANTHROPIC_MODEL)
+        
+        # Initialize AI generator based on provider
+        if config.AI_PROVIDER == "anthropic":
+            self.ai_generator = AIGenerator(
+                provider="anthropic",
+                api_key=config.ANTHROPIC_API_KEY,
+                model=config.ANTHROPIC_MODEL
+            )
+        elif config.AI_PROVIDER == "ollama":
+            self.ai_generator = AIGenerator(
+                provider="ollama",
+                model=config.OLLAMA_MODEL,
+                ollama_base_url=config.OLLAMA_BASE_URL
+            )
+        else:
+            raise ValueError(f"Unsupported AI provider: {config.AI_PROVIDER}")
+        
         self.session_manager = SessionManager(config.MAX_HISTORY)
         
         # Initialize search tools
@@ -138,6 +154,46 @@ class RAGSystem:
         
         # Return response with sources from tool searches
         return response, sources
+    
+    def query_stream(self, query: str, session_id: Optional[str] = None):
+        """
+        Process a user query using the RAG system with streaming response.
+        
+        Args:
+            query: User's question
+            session_id: Optional session ID for conversation context
+            
+        Yields:
+            Dict chunks with response data
+        """
+        # Create prompt for the AI with clear instructions
+        prompt = f"""Answer this question about course materials: {query}"""
+        
+        # Get conversation history if session exists
+        history = None
+        if session_id:
+            history = self.session_manager.get_conversation_history(session_id)
+        
+        # Start streaming response
+        yield {"type": "session_id", "session_id": session_id}
+        
+        # Generate streaming response using AI with tools
+        full_response = ""
+        for chunk in self.ai_generator.generate_response_stream(
+            query=prompt,
+            conversation_history=history,
+            tools=self.tool_manager.get_tool_definitions(),
+            tool_manager=self.tool_manager
+        ):
+            if chunk.get("type") == "content":
+                full_response += chunk.get("content", "")
+                yield chunk
+            elif chunk.get("type") == "sources":
+                yield chunk
+        
+        # Update conversation history
+        if session_id and full_response:
+            self.session_manager.add_exchange(session_id, query, full_response)
     
     def get_course_analytics(self) -> Dict:
         """Get analytics about the course catalog"""

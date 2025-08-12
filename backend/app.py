@@ -5,9 +5,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import os
+import json
 
 from config import config
 from rag_system import RAGSystem
@@ -69,6 +71,38 @@ async def query_documents(request: QueryRequest):
             answer=answer,
             sources=sources,
             session_id=session_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/query/stream")
+async def query_documents_stream(request: QueryRequest):
+    """Process a query and return streaming response with sources"""
+    try:
+        # Create session if not provided
+        session_id = request.session_id
+        if not session_id:
+            session_id = rag_system.session_manager.create_session()
+        
+        def generate_stream():
+            try:
+                # Process query using RAG system with streaming
+                for chunk in rag_system.query_stream(request.query, session_id):
+                    yield f"data: {json.dumps(chunk)}\n\n"
+            except Exception as e:
+                error_chunk = {"error": str(e)}
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+            finally:
+                yield "data: [DONE]\n\n"
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream"
+            }
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

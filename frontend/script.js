@@ -60,30 +60,8 @@ async function sendMessage() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     try {
-        const response = await fetch(`${API_URL}/query`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                query: query,
-                session_id: currentSessionId
-            })
-        });
-
-        if (!response.ok) throw new Error('Query failed');
-
-        const data = await response.json();
-        
-        // Update session ID if new
-        if (!currentSessionId) {
-            currentSessionId = data.session_id;
-        }
-
-        // Replace loading message with response
-        loadingMessage.remove();
-        addMessage(data.answer, 'assistant', data.sources);
-
+        // Use streaming endpoint for better user experience
+        await handleStreamingResponse(query, loadingMessage);
     } catch (error) {
         // Replace loading message with error
         loadingMessage.remove();
@@ -142,6 +120,94 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+async function handleStreamingResponse(query, loadingMessage) {
+    const response = await fetch(`${API_URL}/query/stream`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            query: query,
+            session_id: currentSessionId
+        })
+    });
+
+    if (!response.ok) throw new Error('Query failed');
+
+    // Remove loading message and create streaming message container
+    loadingMessage.remove();
+    
+    const messageId = Date.now();
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message assistant';
+    messageDiv.id = `message-${messageId}`;
+    
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    messageDiv.appendChild(contentDiv);
+    
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // Process streaming response
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullContent = '';
+    let sources = [];
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6).trim();
+                    if (data === '[DONE]') {
+                        // Finalize message with sources if available
+                        if (sources.length > 0) {
+                            const sourcesHtml = `
+                                <details class="sources-collapsible">
+                                    <summary class="sources-header">Sources</summary>
+                                    <div class="sources-content">${sources.join(', ')}</div>
+                                </details>
+                            `;
+                            messageDiv.innerHTML = contentDiv.outerHTML + sourcesHtml;
+                        }
+                        return;
+                    }
+
+                    try {
+                        const chunk = JSON.parse(data);
+                        
+                        if (chunk.type === 'session_id' && !currentSessionId) {
+                            currentSessionId = chunk.session_id;
+                        } else if (chunk.type === 'content') {
+                            fullContent += chunk.content;
+                            // Convert markdown and update display
+                            contentDiv.innerHTML = marked.parse(fullContent);
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        } else if (chunk.type === 'sources') {
+                            sources = chunk.sources;
+                        } else if (chunk.error) {
+                            throw new Error(chunk.error);
+                        }
+                    } catch (parseError) {
+                        console.warn('Failed to parse chunk:', data);
+                    }
+                }
+            }
+        }
+    } finally {
+        reader.releaseLock();
+    }
 }
 
 // Removed removeMessage function - no longer needed since we handle loading differently

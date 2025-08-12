@@ -1,8 +1,10 @@
 import anthropic
+import ollama
+import json
 from typing import List, Optional, Dict, Any
 
 class AIGenerator:
-    """Handles interactions with Anthropic's Claude API for generating responses"""
+    """Handles interactions with AI models (Anthropic Claude or local Ollama) for generating responses"""
     
     # Static system prompt to avoid rebuilding on each call
     SYSTEM_PROMPT = """ You are an AI assistant specialized in course materials and educational content with access to a comprehensive search tool for course information.
@@ -29,16 +31,28 @@ All responses must be:
 Provide only the direct answer to what was asked.
 """
     
-    def __init__(self, api_key: str, model: str):
-        self.client = anthropic.Anthropic(api_key=api_key)
+    def __init__(self, provider: str, api_key: str = "", model: str = "", ollama_base_url: str = "http://localhost:11434"):
+        self.provider = provider.lower()
         self.model = model
         
-        # Pre-build base API parameters
-        self.base_params = {
-            "model": self.model,
-            "temperature": 0,
-            "max_tokens": 800
-        }
+        if self.provider == "anthropic":
+            self.client = anthropic.Anthropic(api_key=api_key)
+            self.base_params = {
+                "model": self.model,
+                "temperature": 0,
+                "max_tokens": 800
+            }
+        elif self.provider == "ollama":
+            self.ollama_client = ollama.Client(host=ollama_base_url)
+            self.base_params = {
+                "model": self.model,
+                "options": {
+                    "temperature": 0,
+                    "num_predict": 800
+                }
+            }
+        else:
+            raise ValueError(f"Unsupported AI provider: {provider}")
     
     def generate_response(self, query: str,
                          conversation_history: Optional[str] = None,
@@ -76,15 +90,12 @@ Provide only the direct answer to what was asked.
             api_params["tools"] = tools
             api_params["tool_choice"] = {"type": "auto"}
         
-        # Get response from Claude
-        response = self.client.messages.create(**api_params)
-        
-        # Handle tool execution if needed
-        if response.stop_reason == "tool_use" and tool_manager:
-            return self._handle_tool_execution(response, api_params, tool_manager)
-        
-        # Return direct response
-        return response.content[0].text
+        if self.provider == "anthropic":
+            return self._generate_anthropic_response(api_params, tools, tool_manager)
+        elif self.provider == "ollama":
+            return self._generate_ollama_response(query, system_content, tools, tool_manager)
+        else:
+            raise ValueError(f"Unsupported provider: {self.provider}")
     
     def _handle_tool_execution(self, initial_response, base_params: Dict[str, Any], tool_manager):
         """
@@ -133,3 +144,152 @@ Provide only the direct answer to what was asked.
         # Get final response
         final_response = self.client.messages.create(**final_params)
         return final_response.content[0].text
+    
+    def _generate_anthropic_response(self, api_params: Dict[str, Any], tools: Optional[List], tool_manager) -> str:
+        """Generate response using Anthropic Claude"""
+        # Get response from Claude
+        response = self.client.messages.create(**api_params)
+        
+        # Handle tool execution if needed
+        if response.stop_reason == "tool_use" and tool_manager:
+            return self._handle_tool_execution(response, api_params, tool_manager)
+        
+        # Return direct response
+        return response.content[0].text
+    
+    def _generate_ollama_response(self, query: str, system_content: str, tools: Optional[List], tool_manager) -> str:
+        """Generate response using local Ollama model"""
+        # For Ollama, we need to handle tools differently since it doesn't have native tool calling
+        # We'll use a simplified approach: if tools are available, we'll ask the model to decide
+        
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": query}
+        ]
+        
+        # Add tool information to the prompt if tools are available
+        if tools and tool_manager:
+            # Simple tool handling for Ollama - check if search is needed
+            search_keywords = ["course", "lesson", "instructor", "content", "material", "chapter", "topic"]
+            query_lower = query.lower()
+            
+            if any(keyword in query_lower for keyword in search_keywords):
+                # Execute search tool
+                try:
+                    search_result = tool_manager.execute_tool("search_course_content", query=query)
+                    enhanced_query = f"{query}\n\nRelevant course content:\n{search_result}"
+                    messages[-1]["content"] = enhanced_query
+                except Exception as e:
+                    print(f"Search tool error: {e}")
+        
+        # Generate response with Ollama
+        response = self.ollama_client.chat(
+            model=self.model,
+            messages=messages,
+            options=self.base_params["options"]
+        )
+        
+        return response['message']['content']
+    
+    def generate_response_stream(self, query: str,
+                                conversation_history: Optional[str] = None,
+                                tools: Optional[List] = None,
+                                tool_manager=None):
+        """
+        Generate streaming AI response with optional tool usage and conversation context.
+        
+        Args:
+            query: The user's question or request
+            conversation_history: Previous messages for context
+            tools: Available tools the AI can use
+            tool_manager: Manager to execute tools
+            
+        Yields:
+            Dict chunks with response data
+        """
+        
+        # Build system content efficiently
+        system_content = (
+            f"{self.SYSTEM_PROMPT}\n\nPrevious conversation:\n{conversation_history}"
+            if conversation_history 
+            else self.SYSTEM_PROMPT
+        )
+        
+        if self.provider == "anthropic":
+            yield from self._generate_anthropic_response_stream(query, system_content, tools, tool_manager)
+        elif self.provider == "ollama":
+            yield from self._generate_ollama_response_stream(query, system_content, tools, tool_manager)
+        else:
+            raise ValueError(f"Unsupported provider: {self.provider}")
+    
+    def _generate_anthropic_response_stream(self, query: str, system_content: str, tools: Optional[List], tool_manager):
+        """Generate streaming response using Anthropic Claude"""
+        # Anthropic doesn't have native streaming with tools, so we'll use the regular method
+        # and yield the complete response
+        api_params = {
+            **self.base_params,
+            "messages": [{"role": "user", "content": query}],
+            "system": system_content
+        }
+        
+        if tools:
+            api_params["tools"] = tools
+            api_params["tool_choice"] = {"type": "auto"}
+        
+        response = self.client.messages.create(**api_params)
+        
+        if response.stop_reason == "tool_use" and tool_manager:
+            final_response = self._handle_tool_execution(response, api_params, tool_manager)
+            yield {"type": "content", "content": final_response}
+        else:
+            yield {"type": "content", "content": response.content[0].text}
+        
+        # Get sources after response
+        if tool_manager:
+            sources = tool_manager.get_last_sources()
+            if sources:
+                yield {"type": "sources", "sources": sources}
+            tool_manager.reset_sources()
+    
+    def _generate_ollama_response_stream(self, query: str, system_content: str, tools: Optional[List], tool_manager):
+        """Generate streaming response using local Ollama model"""
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": query}
+        ]
+        
+        # Handle tools for Ollama
+        if tools and tool_manager:
+            search_keywords = ["course", "lesson", "instructor", "content", "material", "chapter", "topic"]
+            query_lower = query.lower()
+            
+            if any(keyword in query_lower for keyword in search_keywords):
+                try:
+                    search_result = tool_manager.execute_tool("search_course_content", query=query)
+                    enhanced_query = f"{query}\n\nRelevant course content:\n{search_result}"
+                    messages[-1]["content"] = enhanced_query
+                    
+                    # Yield sources
+                    sources = tool_manager.get_last_sources()
+                    if sources:
+                        yield {"type": "sources", "sources": sources}
+                    tool_manager.reset_sources()
+                except Exception as e:
+                    print(f"Search tool error: {e}")
+        
+        # Stream response from Ollama
+        try:
+            stream = self.ollama_client.chat(
+                model=self.model,
+                messages=messages,
+                options=self.base_params["options"],
+                stream=True
+            )
+            
+            for chunk in stream:
+                if 'message' in chunk and 'content' in chunk['message']:
+                    content = chunk['message']['content']
+                    if content:
+                        yield {"type": "content", "content": content}
+        except Exception as e:
+            yield {"type": "content", "content": f"Error: {str(e)}"}

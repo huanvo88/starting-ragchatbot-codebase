@@ -1,0 +1,25 @@
+{
+  "ollama": {
+    "default_model": "qwen2.5:7b",
+    "available_models": [
+      "qwen2.5:7b",
+      "qwen3:8b",
+      "qwen3:14b",
+      "qwen3:30b"
+    ],
+    "model_descriptions": {
+      "qwen2.5:7b": "Fast responses, good performance (4.1GB)",
+      "qwen3:8b": "Balanced performance with thinking (5.2GB)",
+      "qwen3:14b": "Better reasoning, slower responses (9.3GB)",
+      "qwen3:30b": "Best performance, high memory usage (19GB)"
+    }
+  },
+  "anthropic": {
+    "default_model": "claude-sonnet-4-20250514",
+    "available_models": [
+      "claude-sonnet-4-20250514",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-haiku-20240307"
+    ]
+  }
+}
