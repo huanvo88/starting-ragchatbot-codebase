@@ -124,3 +124,4 @@ Centralized configuration using environment variables and external model configu
 - **Data Persistence**: ChromaDB stores data in `backend/chroma_db/` directory
 - **Document Loading**: Course documents automatically loaded from `docs/` on startup
 - always use uv to run the server do not use pip directly
+- when updating CSS style, remember to update the version as well to avoid cached browser
